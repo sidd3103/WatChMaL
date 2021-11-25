@@ -178,6 +178,11 @@ class ClassifierEngine:
             
         Returns: None
         """
+        try:
+            os.mkdir(os.path.join(self.dirpath, 'last_batch_indices'))
+        except FileExistsError:
+            pass
+
         # initialize training params
         epochs              = train_config.epochs
         report_interval     = train_config.report_interval
@@ -185,7 +190,6 @@ class ClassifierEngine:
         num_val_batches     = train_config.num_val_batches
         checkpointing       = train_config.checkpointing
         save_interval = train_config.save_interval if 'save_interval' in train_config else None
-
         # set the iterations at which to dump the events and their metrics
         if self.rank == 0:
             print(f"Training... Validation Interval: {val_interval}")
@@ -218,10 +222,12 @@ class ClassifierEngine:
             # update seeding for distributed samplers
             if self.is_distributed:
                 train_loader.sampler.set_epoch(self.epoch)
+            
+            tot_steps = len(train_loader)
 
             # local training loop for batches in a single epoch 
             for self.step, train_data in enumerate(train_loader):
-                
+
                 # run validation on given intervals
                 if self.iteration % val_interval == 0:
                     self.validate(val_iter, num_val_batches, checkpointing)
@@ -256,7 +262,27 @@ class ClassifierEngine:
 
                     print("... Iteration %d ... Epoch %d ... Step %d/%d  ... Training Loss %1.3f ... Training Accuracy %1.3f ... Time Elapsed %1.3f ... Iteration Time %1.3f" %
                           (self.iteration, self.epoch+1, self.step, len(train_loader), res["loss"], res["accuracy"], iteration_time - start_time, iteration_time - previous_iteration_time))
-            
+
+
+                if self.step == tot_steps-1:
+                    last_indices = train_data['indices']
+                    last_softmaxes = res['softmax'].detach().cpu().numpy()
+                    last_predictions = res['predicted_labels'].detach().cpu().numpy()     
+
+                    local_train_results = {"indices":last_indices, "labels":self.labels, "predictions":last_predictions, "softmaxes":last_softmaxes}
+                    
+                    if self.is_distributed:
+                        global_train_results = self.get_synchronized_metrics(local_train_results)
+
+                        if self.rank == 0:
+                            last_indices = np.array(global_train_results["indices"].cpu())
+
+                    if self.rank == 0:
+                        print(f'Saving indices for last batch of epoch {self.epoch+1}')
+                        np.save(os.path.join(self.dirpath, 'last_batch_indices', f'indices_epoch{self.epoch+1}.npy'), last_indices)
+
+
+
             if (save_interval is not None) and ((self.epoch+1)%save_interval == 0):
                 self.save_state(best=False, name=f'_epoch_{self.epoch+1}')      
         
@@ -344,6 +370,7 @@ class ClassifierEngine:
         Returns: None
         """
         print("evaluating in directory: ", self.dirpath)
+
 
         
         # Variables to output at the end
