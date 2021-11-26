@@ -227,11 +227,9 @@ class ClassifierEngine:
 
             # local training loop for batches in a single epoch 
             for self.step, train_data in enumerate(train_loader):
-
-                # run validation on given intervals
-                if self.iteration % val_interval == 0:
-                    self.validate(val_iter, num_val_batches, checkpointing)
                 
+                save_best_state_indices = False
+
                 # Train on batch
                 self.data = train_data['data']
                 self.labels = train_data['labels']
@@ -255,6 +253,10 @@ class ClassifierEngine:
                 self.train_log.write()
                 self.train_log.flush()
                 
+                # run validation on given intervalsz
+                if self.iteration % val_interval == 0:
+                    save_best_state_indices = self.validate(val_iter, num_val_batches, checkpointing)
+
                 # print the metrics at given intervals
                 if self.rank == 0 and self.iteration % report_interval == 0:
                     previous_iteration_time = iteration_time
@@ -295,6 +297,7 @@ class ClassifierEngine:
 
     def validate(self, val_iter, num_val_batches, checkpointing):
         # set model to eval mode
+        best = False
         self.model.eval()
         val_metrics = {"iteration": self.iteration, "loss": 0., "accuracy": 0., "saved_best": 0}
         for val_batch in range(num_val_batches):
@@ -338,6 +341,7 @@ class ClassifierEngine:
             val_metrics["epoch"] = self.epoch
 
             if val_metrics["loss"] < self.best_validation_loss:
+                best = True
                 self.best_validation_loss = val_metrics["loss"]
                 print('best validation loss so far!: {}'.format(self.best_validation_loss))
                 self.save_state(best=True)
@@ -350,6 +354,8 @@ class ClassifierEngine:
             self.val_log.record(val_metrics)
             self.val_log.write()
             self.val_log.flush()
+
+            return best
 
     def evaluate(self, test_config):
         """
